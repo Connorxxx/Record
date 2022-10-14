@@ -2,7 +2,9 @@ package com.connor.record
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.content.ContentValues
+import android.content.Context
 import android.os.Build
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
@@ -51,9 +53,6 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     private lateinit var cameraProviderFuture : ListenableFuture<ProcessCameraProvider>
     private var currentRecording: Recording? = null
-
-    private val path = Environment.getExternalStorageDirectory().absolutePath + "/Download/Record"
-    private val file = File(path, "state")
 
     @RequiresApi(Build.VERSION_CODES.R)
     override fun onCreate(savedInstanceState: Bundle?) {

@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">Record</string>
+    <string name="server_tips">来播录制服务</string>
+    <string name="finalize">录制完成</string>
+    <string name="record_error">录制错误 错误代码：%1$d</string>
+    <string name="start">录制中....</string>
 </resources>

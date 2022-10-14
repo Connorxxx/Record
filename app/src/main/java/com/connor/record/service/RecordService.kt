@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
 import android.view.View
 import androidx.annotation.RequiresApi
@@ -18,6 +19,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.*
+import androidx.camera.video.VideoRecordEvent.Finalize
 import androidx.camera.view.PreviewView
 import androidx.concurrent.futures.await
 import androidx.core.app.NotificationCompat
@@ -26,6 +28,8 @@ import androidx.core.util.Consumer
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import com.connor.record.App
+import com.connor.record.App.Companion.context
 import com.connor.record.MainActivity
 import com.connor.record.R
 import com.connor.record.databinding.ActivityMainBinding
@@ -34,10 +38,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.lzf.easyfloat.EasyFloat
 import com.lzf.easyfloat.enums.ShowPattern
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.*
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -49,12 +50,12 @@ class RecordService : LifecycleService() {
         private const val TAG = "RecordService"
     }
 
-    private val path = Environment.getExternalStorageDirectory().absolutePath + "/Download/Record"
+    private val path = Environment.getExternalStorageDirectory().absolutePath + "/Download/Live/Record"
     private val file = File(path, "state")
+    private val serviceFolder = File(path)
+    private val serviceFile = File(path, "service")
+    private val eventFile = File(path, "event")
 
-
-
-    private lateinit var view: View
 
     private val preview by lazy { Preview.Builder().build() }
 
@@ -63,55 +64,14 @@ class RecordService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
-        view = View.inflate(this, R.layout.activity_main, null)
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                "ktor_server", "Ktor Service",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            manager.createNotificationChannel(channel)
-        }
-        val intent = Intent(this, MainActivity::class.java)
-        val pi = PendingIntent.getActivity(this, 0, intent, 0)
-        val notification = NotificationCompat.Builder(this, "ktor_server")
-            .setContentTitle("Ktor server is running")
-            .setContentText("You could disable it notification")
-            .setSmallIcon(R.drawable.ic_baseline_fiber_manual_record_24)
-            .setContentIntent(pi)
-            .build()
-        startForeground(1, notification)
+        if (!serviceFolder.exists()) serviceFolder.mkdirs()
+        initNotification()
+        initFloat()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        EasyFloat.with(this)
-            .setLayout(R.layout.float_main)
-            .setShowPattern(ShowPattern.ALL_TIME)
-            .registerCallback {
-                show {
-                    Log.d(TAG, "onStartCommand: ")
-                    val previewView = it.findViewById<PreviewView>(R.id.previewViewFloat)
-                    initPreviewView2(previewView)
-                    lifecycleScope.launch(Dispatchers.Main) {
-                        getState.collect { state ->
-                            Log.d(TAG, "onStartCommand: $state")
-                            when (state) {
-                                "start" -> {
-                                    initVideoCapture()
-                                }
-                                "stop" -> {
-                                    val recording = currentRecording
-                                    if (recording != null) {
-                                        recording.stop()
-                                        currentRecording = null
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .show()
+        serviceFile.writeText("running")
+        eventFile.writeText(" ")
         return super.onStartCommand(intent, flags, startId)
     }
 
@@ -122,6 +82,59 @@ class RecordService : LifecycleService() {
             delay(1000)
         }
     }.flowOn(Dispatchers.IO).distinctUntilChanged()
+
+    private fun initNotification() {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "record_server", "Record Service",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
+            manager.createNotificationChannel(channel)
+            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            intent.putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            val pi = PendingIntent.getActivity(this, 0, intent, 0)
+            val notification = NotificationCompat.Builder(this, "record_server")
+                .setContentTitle(getString(R.string.server_tips))
+                .setSmallIcon(R.drawable.ic_baseline_fiber_manual_record_24)
+                .setContentIntent(pi)
+                .build()
+            startForeground(1, notification)
+        }
+    }
+
+    private fun initFloat() {
+        EasyFloat.with(this)
+            .setLayout(R.layout.float_main)
+            .setShowPattern(ShowPattern.ALL_TIME)
+            .registerCallback {
+                show {
+                    if (!App.isRunning) {
+                        Log.d(TAG, "onStartCommand: Float")
+                        val previewView = it.findViewById<PreviewView>(R.id.previewViewFloat)
+                        initPreviewView2(previewView)
+                        lifecycleScope.launch(Dispatchers.Main) {
+                            getState.collectLatest { state ->
+                                Log.d(TAG, "onStartCommand: flow $state")
+                                when (state) {
+                                    "start" -> {
+                                        initVideoCapture()
+                                    }
+                                    "stop" -> {
+                                        val recording = currentRecording
+                                        if (recording != null) {
+                                            recording.stop()
+                                            currentRecording = null
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        App.isRunning = true
+                    }
+                }
+            }.show()
+    }
 
     private fun initPreviewView2(previewView: PreviewView) {
         cameraProviderFuture = ProcessCameraProvider.getInstance(this)
@@ -140,7 +153,6 @@ class RecordService : LifecycleService() {
         preview.setSurfaceProvider(previewView.surfaceProvider)
 
         var camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview)
-
     }
 
     @SuppressLint("MissingPermission")
@@ -169,9 +181,8 @@ class RecordService : LifecycleService() {
             Log.e("日志", "Use case binding failed", exc)
         }
 
-
-        val name = "CameraX-recording-" +
-                SimpleDateFormat(FILENAME_FORMAT, Locale.US)
+        val name = "LiveBox-recording-" +
+                SimpleDateFormat(FILENAME_FORMAT, Locale.CHINA)
                     .format(System.currentTimeMillis()) + ".mp4"
         val contentValues = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, name)
@@ -184,14 +195,30 @@ class RecordService : LifecycleService() {
 
         currentRecording = videoCapture.output
             .prepareRecording(this, mediaStoreOutput).apply {
+                withAudioEnabled()
             }.start(ContextCompat.getMainExecutor(this), captureListener)
     }
 
     private val captureListener = Consumer<VideoRecordEvent> { event ->
         when (event) {
+            is VideoRecordEvent.Start -> {
+                eventFile.writeText(getString(R.string.start))
+            }
             is VideoRecordEvent.Finalize -> {
-                "Ok".showToast()
+                val error = event.error
+                if (error != Finalize.ERROR_NONE) {
+                    eventFile.writeText(getString(R.string.record_error, error))
+                    //getString(R.string.record_error, error).showToast()
+                } else {
+                    eventFile.writeText(getString(R.string.finalize))
+                   // getString(R.string.finalize).showToast()
+                }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        serviceFile.writeText("stop")
     }
 }
