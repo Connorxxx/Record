@@ -11,9 +11,9 @@ fun String.showToast() {
     Toast.makeText(App.context, this, Toast.LENGTH_LONG).show()
 }
 
-@RequiresApi(Build.VERSION_CODES.O)
 inline fun <reified T> startService(context: Context, block: Intent.() -> Unit) {
     val intent = Intent(context, T::class.java)
     intent.block()
-    context.startForegroundService(intent)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+    else context.startService(intent)
 }
